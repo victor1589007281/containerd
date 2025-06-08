@@ -406,6 +406,265 @@ containerd 项目包含了完整的集成测试来验证资源更新功能：
 
 这些测试验证了从 CRI 接口到 cgroups 的完整调用链，确保资源更新功能的正确性和稳定性。
 
+## containerd v2.1.0 支持的完整原地修改能力
+
+除了基本的 CPU 和内存限制之外，containerd v2.1.0 还支持多种其他资源的原地修改能力：
+
+### Linux 容器资源 (LinuxContainerResources)
+
+#### 1. **CPU 资源控制**
+```go
+type LinuxContainerResources struct {
+    // CPU CFS (Completely Fair Scheduler) 周期 (纳秒)
+    CpuPeriod int64 `json:"cpu_period,omitempty"`
+    
+    // CPU CFS 配额 (纳秒)
+    CpuQuota int64 `json:"cpu_quota,omitempty"`
+    
+    // CPU 权重 (相对于其他容器)
+    CpuShares int64 `json:"cpu_shares,omitempty"`
+    
+    // CPU 亲和性：允许的逻辑 CPU 集合
+    CpusetCpus string `json:"cpuset_cpus,omitempty"`
+    
+    // 内存节点亲和性：允许的内存节点集合
+    CpusetMems string `json:"cpuset_mems,omitempty"`
+}
+```
+
+**对应的 cgroups 文件**:
+- `cpu.cfs_period_us`: CPU 调度周期
+- `cpu.cfs_quota_us`: CPU 时间配额
+- `cpu.shares`: CPU 权重
+- `cpuset.cpus`: CPU 亲和性
+- `cpuset.mems`: 内存节点亲和性
+
+#### 2. **内存资源控制**
+```go
+type LinuxContainerResources struct {
+    // 内存限制 (字节)
+    MemoryLimitInBytes int64 `json:"memory_limit_in_bytes,omitempty"`
+    
+    // 内存+交换空间限制 (字节)
+    MemorySwapLimitInBytes int64 `json:"memory_swap_limit_in_bytes,omitempty"`
+}
+```
+
+**对应的 cgroups 文件**:
+- `memory.limit_in_bytes`: 内存限制
+- `memory.memsw.limit_in_bytes`: 内存+交换限制
+
+#### 3. **OOM (Out of Memory) 控制**
+```go
+type LinuxContainerResources struct {
+    // OOM killer 调整分数 (-1000 到 1000)
+    OomScoreAdj int64 `json:"oom_score_adj,omitempty"`
+}
+```
+
+**对应的系统文件**:
+- `/proc/[pid]/oom_score_adj`: 进程 OOM 分数调整
+
+#### 4. **大页内存 (HugePages) 控制**
+```go
+type LinuxContainerResources struct {
+    // 大页内存限制列表
+    HugepageLimits []*HugepageLimit `json:"hugepage_limits,omitempty"`
+}
+
+type HugepageLimit struct {
+    // 页面大小 (如: "2MB", "1GB")
+    PageSize string `json:"page_size,omitempty"`
+    
+    // 限制值 (字节)
+    Limit uint64 `json:"limit,omitempty"`
+}
+```
+
+**对应的 cgroups 文件**:
+- `hugetlb.<hugepagesize>.limit_in_bytes`: 大页内存限制
+
+#### 5. **cgroups v2 统一接口 (Unified)**
+```go
+type LinuxContainerResources struct {
+    // cgroups v2 统一资源配置
+    Unified map[string]string `json:"unified,omitempty"`
+}
+```
+
+**支持的 cgroups v2 控制器**:
+- `memory.max`: 内存限制
+- `memory.swap.max`: 交换空间限制
+- `cpu.max`: CPU 配额和周期
+- `cpu.weight`: CPU 权重
+- `io.max`: IO 带宽限制
+- `io.weight`: IO 权重
+- `pids.max`: 进程数量限制
+
+**示例配置**:
+```go
+Unified: map[string]string{
+    "memory.max": "1073741824",      // 1GB 内存限制
+    "cpu.max": "50000 100000",       // 50% CPU 配额
+    "io.weight": "default 100",      // IO 权重
+    "pids.max": "1024",              // 最大进程数
+}
+```
+
+### Windows 容器资源 (WindowsContainerResources)
+
+#### 1. **Windows CPU 控制**
+```go
+type WindowsContainerResources struct {
+    // CPU 权重 (相对权重)
+    CpuShares int64 `json:"cpu_shares,omitempty"`
+    
+    // 可用 CPU 数量
+    CpuCount int64 `json:"cpu_count,omitempty"`
+    
+    // CPU 最大使用率 (百分比 × 100)
+    CpuMaximum int64 `json:"cpu_maximum,omitempty"`
+    
+    // CPU 亲和性配置
+    AffinityCpus []*WindowsCpuGroupAffinity `json:"affinity_cpus,omitempty"`
+}
+```
+
+#### 2. **Windows 内存和存储控制**
+```go
+type WindowsContainerResources struct {
+    // 内存限制 (字节)
+    MemoryLimitInBytes int64 `json:"memory_limit_in_bytes,omitempty"`
+    
+    // 根文件系统/临时空间大小 (字节)
+    RootfsSizeInBytes int64 `json:"rootfs_size_in_bytes,omitempty"`
+}
+```
+
+### 任务级别的扩展配置
+
+#### **自定义注解 (Annotations)**
+```go
+type UpdateContainerResourcesRequest struct {
+    // 任意键值对，用于实验性或扩展资源配置
+    Annotations map[string]string `json:"annotations,omitempty"`
+}
+```
+
+**使用场景**:
+- GPU 资源配置
+- 网络 QoS 配置
+- 自定义 cgroups 控制器
+- 运行时特定配置
+
+### 资源更新的完整支持矩阵
+
+| 资源类型 | Linux | Windows | cgroups v1 | cgroups v2 | 原地更新 |
+|---------|-------|---------|------------|------------|----------|
+| CPU 配额/周期 | ✅ | ✅ | ✅ | ✅ | ✅ |
+| CPU 权重 | ✅ | ✅ | ✅ | ✅ | ✅ |
+| CPU 亲和性 | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 内存限制 | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 交换空间限制 | ✅ | ❌ | ✅ | ✅ | ✅ |
+| OOM 分数调整 | ✅ | ❌ | ✅ | ✅ | ✅ |
+| 大页内存 | ✅ | ❌ | ✅ | ✅ | ✅ |
+| IO 限制 | ✅* | ❌ | ✅* | ✅ | ✅ |
+| 进程数限制 | ✅* | ❌ | ✅* | ✅ | ✅ |
+| 根文件系统大小 | ❌ | ✅ | ❌ | ❌ | ✅ |
+
+> ✅ = 支持, ❌ = 不支持, ✅* = 通过 Unified 字段支持
+
+### Pod Sandbox 资源更新
+
+**当前状态**: containerd v2.1.0 中 `UpdatePodSandboxResources` 功能尚未实现：
+
+```go
+// 📁 internal/cri/server/sandbox_update_resources.go:25
+func (c *criService) UpdatePodSandboxResources(ctx context.Context, r *runtime.UpdatePodSandboxResourcesRequest) (*runtime.UpdatePodSandboxResourcesResponse, error) {
+    return nil, errors.New("not implemented yet")
+}
+```
+
+### 实际使用示例
+
+#### 1. **基本 CPU/内存更新**
+```go
+request := &runtime.UpdateContainerResourcesRequest{
+    ContainerId: "container-123",
+    Linux: &runtime.LinuxContainerResources{
+        CpuPeriod:          100000,    // 100ms
+        CpuQuota:           50000,     // 50ms (50% CPU)
+        MemoryLimitInBytes: 1073741824, // 1GB
+        MemorySwapLimitInBytes: 2147483648, // 2GB
+    },
+}
+```
+
+#### 2. **CPU 亲和性设置**
+```go
+request := &runtime.UpdateContainerResourcesRequest{
+    ContainerId: "container-123",
+    Linux: &runtime.LinuxContainerResources{
+        CpusetCpus: "0-3",     // 使用 CPU 0-3
+        CpusetMems: "0",       // 使用内存节点 0
+    },
+}
+```
+
+#### 3. **大页内存配置**
+```go
+request := &runtime.UpdateContainerResourcesRequest{
+    ContainerId: "container-123",
+    Linux: &runtime.LinuxContainerResources{
+        HugepageLimits: []*runtime.HugepageLimit{
+            {
+                PageSize: "2MB",
+                Limit:    1073741824, // 1GB of 2MB pages
+            },
+            {
+                PageSize: "1GB", 
+                Limit:    2147483648, // 2GB of 1GB pages
+            },
+        },
+    },
+}
+```
+
+#### 4. **cgroups v2 高级配置**
+```go
+request := &runtime.UpdateContainerResourcesRequest{
+    ContainerId: "container-123",
+    Linux: &runtime.LinuxContainerResources{
+        Unified: map[string]string{
+            "memory.max":    "1073741824",  // 1GB 内存
+            "cpu.max":       "50000 100000", // 50% CPU
+            "io.max":        "8:0 rbps=2097152 wbps=1048576", // IO 限制
+            "pids.max":      "1024",        // 最大进程数
+        },
+    },
+}
+```
+
+#### 5. **实验性注解配置**
+```go
+request := &runtime.UpdateContainerResourcesRequest{
+    ContainerId: "container-123",
+    Annotations: map[string]string{
+        "nvidia.com/gpu":           "1",     // GPU 配置
+        "network.alpha.io/class":   "gold",  // 网络 QoS
+        "custom.runtime.io/config": "high-perf", // 自定义配置
+    },
+}
+```
+
+### 技术限制和注意事项
+
+1. **状态依赖**: 只有运行中或暂停的容器才能更新资源
+2. **cgroups 可用性**: 某些资源控制器可能在系统中不可用
+3. **向下兼容**: 新的 cgroups v2 功能在 v1 系统中不可用
+4. **运行时支持**: 不同的容器运行时可能有不同的支持程度
+5. **权限要求**: 某些资源修改需要特定的系统权限
+
 ---
 
 这个调用链展示了从 Kubernetes 发起资源更新请求到最终修改 Linux cgroups 的完整流程，每一层都有明确的职责分工，确保了系统的模块化和可维护性。 
