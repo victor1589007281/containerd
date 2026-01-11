@@ -332,29 +332,36 @@ sequenceDiagram
     participant R as runc
     participant L as Linux cgroups
 
+    rect rgba(230, 255, 230, 0.3)
+    Note over K,L: 资源更新请求
     K->>C: UpdateContainerResources
-    Note over C: 🔒 获取容器状态锁
+    Note over C: 获取容器状态锁
     C->>C: 备份当前 OCI spec
     C->>C: 更新 OCI spec
     C->>S: Task.Update()
     S->>S: 验证容器状态
     S->>R: runc update
     R->>L: 写入 cgroup 文件
+    end
     
     alt 更新成功
+        rect rgba(230, 230, 255, 0.3)
         L-->>R: 返回成功
         R-->>S: 返回成功  
         S-->>C: 返回成功
         C->>C: 提交状态更新
-        Note over C: 🔓 释放容器状态锁
+        Note over C: 释放容器状态锁
         C-->>K: 返回成功
+        end
     else 更新失败
+        rect rgba(255, 230, 230, 0.3)
         L-->>R: 返回错误
         R-->>S: 返回错误
         S-->>C: 返回错误
         C->>C: 回滚 OCI spec
-        Note over C: 🔓 释放容器状态锁  
+        Note over C: 释放容器状态锁  
         C-->>K: 返回错误
+        end
     end
 ```
 
